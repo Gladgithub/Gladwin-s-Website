@@ -1,0 +1,16 @@
+*{
+    margin: 0;
+    padding: 0;
+}
+body{
+    background-color: #f6f7d7;    
+}
+canvas{
+    position: relative;
+    left: 180px;
+    top: 11.5px;
+    width: 1024px;
+    height: 640px;
+    border: none;
+    background-color: #f4eec7;
+}
