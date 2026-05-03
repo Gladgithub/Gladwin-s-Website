@@ -234,17 +234,6 @@ var levelTen = [
 
 //Developer Tools:
 var collidables = [];
-var enemyTiles = [];
-var serverEnemies = [];
-var remotePlayers = {};
-var socket = null;
-var socketReady = false;
-var lastSocketUpdate = 0;
-var socketStatus = "Multiplayer offline";
-var playerName = "Player " + Math.floor(Math.random() * 1000);
-var keys = {};
-var lastFrameTime = 0;
-var localEnemyStartTime = Date.now();
 
 var player = {
     x: 100,
@@ -259,8 +248,6 @@ var player = {
     color: "#52de97",
     speed: 5,
     jumpForce: 15,
-    gravity: 1,
-    maxFallSpeed: 18,
     grounded: false,
     colliding: false,
     
@@ -351,198 +338,12 @@ function collides(a, b){
            a.y < b.y + b.height &&
            a.y + a.height > b.y;
 }
-
-function makePlayerCollider(otherPlayer){
-    return {
-        id: "player",
-        x: otherPlayer.x,
-        y: otherPlayer.y,
-        width: otherPlayer.width || player.width,
-        height: otherPlayer.height || player.height,
-        color: otherPlayer.color || "#2772db",
-        name: otherPlayer.name || "Player",
-        getTop: function(){
-            return this.y;
-        },
-        getLeft: function(){
-            return this.x;
-        },
-        getBottom: function(){
-            return this.y + this.height;
-        },
-        getRight: function(){
-            return this.x + this.width;
-        },
-        getCenterX: function(){
-            return this.x + (this.width / 2);
-        },
-        getCenterY: function(){
-            return this.y + (this.height / 2);
-        },
-    };
-}
-
-function getSameLevelRemotePlayers(){
-    var players = [];
-    for(var id in remotePlayers){
-        if(remotePlayers[id].levelIndex == levelIndex){
-            players.push(makePlayerCollider(remotePlayers[id]));
-        }
-    }
-    return players;
-}
-
-function randomPlayerColor(){
-    var colors = ["#2772db", "#f05454", "#7d5fff", "#00a878", "#ff9f1c", "#8e44ad"];
-    return colors[Math.floor(Math.random() * colors.length)];
-}
-
-player.color = randomPlayerColor();
-
-function sanitizePlayerState(state){
-    return {
-        id: state.id,
-        name: state.name || "Player",
-        x: Number(state.x) || 0,
-        y: Number(state.y) || 0,
-        width: Number(state.width) || player.width,
-        height: Number(state.height) || player.height,
-        color: state.color || "#2772db",
-        levelIndex: Number(state.levelIndex) || 0
-    };
-}
-
-function connectMultiplayer(){
-    var serverUrl = window.PLATFORMER_SOCKET_URL;
-    if(!serverUrl || typeof io == "undefined"){
-        socketStatus = "Add server URL for multiplayer";
-        return;
-    }
-
-    socket = io(serverUrl, {
-        transports: ["websocket", "polling"]
-    });
-
-    socket.on("connect", function(){
-        socketReady = true;
-        socketStatus = "Online players: 1";
-        socket.emit("joinGame", getLocalPlayerState());
-    });
-
-    socket.on("connect_error", function(){
-        socketReady = false;
-        socketStatus = "Multiplayer server unavailable";
-    });
-
-    socket.on("disconnect", function(){
-        socketReady = false;
-        remotePlayers = {};
-        socketStatus = "Multiplayer disconnected";
-    });
-
-    socket.on("players", function(players){
-        remotePlayers = {};
-        for(var id in players){
-            if(id != socket.id){
-                remotePlayers[id] = sanitizePlayerState(players[id]);
-            }
-        }
-        socketStatus = "Online players: " + (Object.keys(remotePlayers).length + 1);
-    });
-
-    socket.on("enemies", function(payload){
-        if(payload.levelIndex == levelIndex){
-            serverEnemies = payload.enemies || [];
-        }
-    });
-}
-
-function getLocalPlayerState(){
-    return {
-        name: playerName,
-        x: player.x,
-        y: player.y,
-        width: player.width,
-        height: player.height,
-        color: player.color,
-        levelIndex: levelIndex,
-        enemies: getEnemyLayout()
-    };
-}
-
-function getEnemyLayout(){
-    var enemies = [];
-    for(var i = 0; i < enemyTiles.length; i++){
-        enemies.push({
-            index: i,
-            x: enemyTiles[i].baseX,
-            y: enemyTiles[i].baseY,
-            width: enemyTiles[i].width,
-            height: enemyTiles[i].height
-        });
-    }
-    return enemies;
-}
-
-function syncPlayer(){
-    if(!socketReady){
-        return;
-    }
-
-    var now = Date.now();
-    if(now - lastSocketUpdate < 33){
-        return;
-    }
-
-    lastSocketUpdate = now;
-    socket.emit("playerState", getLocalPlayerState());
-}
-
-function changeLevel(nextLevelIndex){
-    levelIndex = nextLevelIndex;
-    if(levelIndex > levels.length - 1){
-        levelIndex = 0;
-    }
-    if(levelIndex < 0){
-        levelIndex = levels.length - 1;
-    }
-
-    setupTileMap(levels[levelIndex]);
-    player.respawn();
-    remotePlayers = {};
-    serverEnemies = [];
-    message("Level " + (levelIndex + 1));
-
-    if(socketReady){
-        socket.emit("changeLevel", getLocalPlayerState());
-    }
-}
-
-function drawRemotePlayers(){
-    var players = getSameLevelRemotePlayers();
-    for(var i = 0; i < players.length; i++){
-        ctx.fillStyle = players[i].color;
-        ctx.fillRect(players[i].x, players[i].y, players[i].width, players[i].height);
-        ctx.font = "14px 'Fira Code', monospace";
-        ctx.fillStyle = "black";
-        ctx.fillText(players[i].name, players[i].x - 4, players[i].y - 8);
-    }
-}
-
-function drawMultiplayerStatus(){
-    ctx.font = "16px 'Fira Code', monospace";
-    ctx.fillStyle = socketReady ? "#00a878" : "#444";
-    ctx.fillText(socketStatus, 16, 26);
-}
-
 var msgBox = "";
 var msgBoxX = 420;
 var msgCount = 0;
 
 function setupTileMap(tileMap){
-    collidables = [];
-    enemyTiles = [];
-    localEnemyStartTime = Date.now();
+    collidables = [];    
     for(var y = 0; y < mapHeight; y++){
         for(var x = 0; x < mapWidth; x++){
             switch(tileMap[((y*mapWidth)+x)]){
@@ -559,77 +360,62 @@ function setupTileMap(tileMap){
                     new Tile(3, x*tileSize, y*tileSize, "gold");
                     break;
                 case 4:
-                    var enemy = new Tile(4, x*tileSize, y*tileSize, "#ff5722");
-                    enemy.enemyIndex = enemyTiles.length;
-                    enemy.baseX = enemy.x;
-                    enemy.baseY = enemy.y;
-                    enemyTiles.push(enemy);
+                    new Tile(4, x*tileSize, y*tileSize, "#ff5722");
                     break;
             }
         }
-    }
+    }    
 }
-
-function getLocalEnemyX(enemy){
-    var range = 7 * tileSize;
-    var speed = 240;
-    var distance = ((Date.now() - localEnemyStartTime) / 1000 * speed) % (range * 2);
-    if(distance > range){
-        distance = (range * 2) - distance;
-    }
-    return enemy.baseX + distance;
-}
-
-function updateEnemyTilePositions(){
-    for(var i = 0; i < enemyTiles.length; i++){
-        var serverEnemy = serverEnemies[enemyTiles[i].enemyIndex];
-        enemyTiles[i].x = serverEnemy ? serverEnemy.x : getLocalEnemyX(enemyTiles[i]);
-        enemyTiles[i].y = serverEnemy ? serverEnemy.y : enemyTiles[i].baseY;
-    }
-}
-
 function updateTileMap(){
-    updateEnemyTilePositions();
     for(var i = 0; i < collidables.length; i++){
         ctx.fillStyle = collidables[i].color;
         ctx.fillRect(collidables[i].x, collidables[i].y, tileSize, tileSize);
+        if(collidables[i].id == 4 && collidables[i].offsetX < 7 * tileSize){
+            collidables[i].offsetX += collidables[i].tileSpeed;
+            collidables[i].x += collidables[i].tileSpeed * collidables[i].direction;
+        } else {
+            collidables[i].direction *= -1;    
+            collidables[i].offsetX = 0;
+        }
     }    
 }
 function collide(){
     player.colliding = false;
-    player.grounded = false;
-    var solidBodies = collidables.concat(getSameLevelRemotePlayers());
-    for(var i = 0; i < solidBodies.length; i++){
-        if(Math.abs(player.x - solidBodies[i].x) < 96 && Math.abs(player.y - solidBodies[i].y) < 96){
-            if(collides(player, solidBodies[i])){
-                if(player.getBottom() > solidBodies[i].y && player.y < solidBodies[i].y){
+    for(var i = 0; i < collidables.length; i++){
+        if(Math.abs(player.x - collidables[i].x) < 96 && Math.abs(player.y - collidables[i].y) < 96){
+            if(collides(player, collidables[i])){
+                if(player.getBottom() > collidables[i].y && player.y < collidables[i].y){
                     player.colliding = true;    
                     player.grounded = true; 
                     player.dy = 0;
-                    player.y = solidBodies[i].y - player.height;
-                } else if(player.getTop() < solidBodies[i].y + solidBodies[i].height && player.getBottom() > solidBodies[i].y + solidBodies[i].height && player.oy >= solidBodies[i].getBottom()){
+                    player.y = collidables[i].y - player.height + 0.1;
+                } else if(player.getTop() < collidables[i].y + collidables[i].height && player.getBottom() > collidables[i].y + collidables[i].height && player.oy >= collidables[i].getBottom()){
                     player.dy = 0;
-                    player.y = solidBodies[i].y + solidBodies[i].height;    
-                } else if(player.ox + player.width >= solidBodies[i].x && player.dx == 5 && player.getOldCenterX() < solidBodies[i].getCenterX()){
-                    player.x = solidBodies[i].x - player.width;
+                    player.y = collidables[i].y + collidables[i].height + player.height - 0.1;    
+                } else if(player.ox + player.width >= collidables[i].x && player.dx == 5 && player.getOldCenterX() < collidables[i].getCenterX()){
+                    player.x = collidables[i].x - player.width;
                     player.dx = 0;
-                } else if(player.ox <= solidBodies[i].getRight() && player.dx == -5 && player.getOldCenterX() > solidBodies[i].getCenterX()){
-                    player.x = solidBodies[i].x + solidBodies[i].width;
+                } else if(player.ox <= collidables[i].getRight() && player.dx == -5 && player.getOldCenterX() > collidables[i].getCenterX()){
+                    player.x = collidables[i].x + collidables[i].width;
                     player.dx = 0;
                 }
-                if(solidBodies[i].id == 2){
+                if(collidables[i].id == 2){
                     message("Ouch! Don't touch the lava");
                     player.respawn();
                 }
-                if(solidBodies[i].id == 3){
-                    var nextLevelIndex = levelIndex + 1;
+                if(collidables[i].id == 3){
+                    levelIndex++;
+                    if(levelIndex > levels.length - 1){
+                        levelIndex = 0;    
+                    }
                     setTimeout(function(){
-                        changeLevel(nextLevelIndex);
+                        setupTileMap(levels[levelIndex]);
+                        message("Level " + (levelIndex + 1));
                     }, 100)
                     player.respawn();
 
                 }
-                if(solidBodies[i].id == 4){
+                if(collidables[i].id == 4){
                     message("The enemies are dangerous. Don't go near them.");
                     player.respawn();
                 }
@@ -641,32 +427,18 @@ function collide(){
         }
     }
 }
-function update(timestamp){
-    if(!lastFrameTime){
-        lastFrameTime = timestamp;
-    }
-    var frameScale = Math.min((timestamp - lastFrameTime) / 16.67, 2);
-    lastFrameTime = timestamp;
-
+function update(){
     ctx.clearRect(0, 0, c.width, c.height);
+    
+    gravity();
+    collide();  
+    move();
+    
     
     player.ox = player.x;
     player.oy = player.y;
-
-    applyInput();
-    gravity(frameScale);
-    player.x += player.dx * frameScale;
-    player.y += player.dy * frameScale;
-    updateEnemyTilePositions();
-    collide();
-
-    if(!keys.a && !keys.d){
-        player.dx = 0;
-    }
-
-    if(player.dy > player.maxFallSpeed){
-        player.dy = player.maxFallSpeed;
-    }
+    player.x += player.dx;
+    player.y += player.dy;
     
     if(player.getLeft() < 0){
         player.x = 0;        
@@ -679,12 +451,8 @@ function update(timestamp){
     
     updateTileMap();
     
-    drawRemotePlayers();
-
     ctx.fillStyle = player.color;
     ctx.fillRect(player.x, player.y, player.width, player.height);
-    syncPlayer();
-    drawMultiplayerStatus();
     if(msgBox != ""){
         ctx.font = "30px 'Fira Code', monospace";
         ctx.fillStyle = "black";
@@ -692,23 +460,12 @@ function update(timestamp){
     }
     requestAnimationFrame(update);
 }
-function gravity(frameScale){
+function gravity(){
     if(player.grounded == false){
-        player.dy += player.gravity * frameScale;   
+        player.dy += 1;   
     }
 }
-
-function applyInput(){
-    if(keys.a && !keys.d){
-        player.dx = -player.speed;
-    } else if(keys.d && !keys.a){
-        player.dx = player.speed;
-    } else {
-        player.dx = 0;
-    }
-}
-
-function pressKey(key){
+function move(key){
     switch(key){
         case 'w':
             if(player.grounded == true){
@@ -717,7 +474,13 @@ function pressKey(key){
                 player.dy -= player.jumpForce;
             }
             break;
+        case 'a':
+            player.dx = -player.speed;
+            break;
         case 's':
+            break;
+        case 'd':
+            player.dx = player.speed;
             break;
         case ' ':
             break;
@@ -726,10 +489,22 @@ function pressKey(key){
             break;
         // Developer Tools:
         case 'l':
-            changeLevel(levelIndex + 1);
+            levelIndex++;
+            if(levelIndex > levels.length - 1){
+                levelIndex = 0;    
+            }
+            setupTileMap(levels[levelIndex]);
+            player.respawn();            
+            message("Level " + (levelIndex + 1));
             break;
         case 'k':
-            changeLevel(levelIndex - 1);
+            levelIndex--;
+            if(levelIndex < 0){
+                levelIndex = levels.length - 1;
+            }
+            setupTileMap(levels[levelIndex]);
+            player.respawn();
+            message("Level " + (levelIndex + 1));
             break;
     }
 } 
@@ -748,25 +523,13 @@ function message(text){
 }
 
 window.addEventListener("keydown", ((evt) => {
-    var key = evt.key.toLowerCase();
-    if(["w", "a", "s", "d", "r", "l", "k", " "].includes(key)){
-        evt.preventDefault();
-    }
-    if(!keys[key]){
-        pressKey(key);
-    }
-    keys[key] = true;
+    move(evt.key);
 }));
 window.addEventListener("keyup", ((evt) => {
-    keys[evt.key.toLowerCase()] = false;
+    player.dx = 0;        
 }));
 
 window.onload = function(){
-    var enteredName = prompt("Player name:");
-    if(enteredName){
-        playerName = enteredName.substring(0, 18);
-    }
-
     levels.push(levelOne);
     levels.push(levelTwo);
     levels.push(levelThree);
@@ -777,10 +540,7 @@ window.onload = function(){
     levels.push(levelEight);
     levels.push(levelNine);
     levels.push(levelTen);
-    player.ox = player.x;
-    player.oy = player.y;
     setupTileMap(levels[levelIndex]); 
-    connectMultiplayer();
-    message("Use WASD to move");
-    requestAnimationFrame(update);
+    update();
+    message("Level 1");
 }
