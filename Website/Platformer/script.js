@@ -234,6 +234,12 @@ var levelTen = [
 
 //Developer Tools:
 var collidables = [];
+var remotePlayers = {};
+var socket = null;
+var socketReady = false;
+var lastSocketUpdate = 0;
+var socketStatus = "Multiplayer offline";
+var playerName = "Player " + Math.floor(Math.random() * 1000);
 
 var player = {
     x: 100,
@@ -338,6 +344,168 @@ function collides(a, b){
            a.y < b.y + b.height &&
            a.y + a.height > b.y;
 }
+
+function makePlayerCollider(otherPlayer){
+    return {
+        id: "player",
+        x: otherPlayer.x,
+        y: otherPlayer.y,
+        width: otherPlayer.width || player.width,
+        height: otherPlayer.height || player.height,
+        color: otherPlayer.color || "#2772db",
+        name: otherPlayer.name || "Player",
+        getTop: function(){
+            return this.y;
+        },
+        getLeft: function(){
+            return this.x;
+        },
+        getBottom: function(){
+            return this.y + this.height;
+        },
+        getRight: function(){
+            return this.x + this.width;
+        },
+        getCenterX: function(){
+            return this.x + (this.width / 2);
+        },
+        getCenterY: function(){
+            return this.y + (this.height / 2);
+        },
+    };
+}
+
+function getSameLevelRemotePlayers(){
+    var players = [];
+    for(var id in remotePlayers){
+        if(remotePlayers[id].levelIndex == levelIndex){
+            players.push(makePlayerCollider(remotePlayers[id]));
+        }
+    }
+    return players;
+}
+
+function randomPlayerColor(){
+    var colors = ["#2772db", "#f05454", "#7d5fff", "#00a878", "#ff9f1c", "#8e44ad"];
+    return colors[Math.floor(Math.random() * colors.length)];
+}
+
+player.color = randomPlayerColor();
+
+function sanitizePlayerState(state){
+    return {
+        id: state.id,
+        name: state.name || "Player",
+        x: Number(state.x) || 0,
+        y: Number(state.y) || 0,
+        width: Number(state.width) || player.width,
+        height: Number(state.height) || player.height,
+        color: state.color || "#2772db",
+        levelIndex: Number(state.levelIndex) || 0
+    };
+}
+
+function connectMultiplayer(){
+    var serverUrl = window.PLATFORMER_SOCKET_URL;
+    if(!serverUrl || typeof io == "undefined"){
+        socketStatus = "Add server URL for multiplayer";
+        return;
+    }
+
+    socket = io(serverUrl, {
+        transports: ["websocket", "polling"]
+    });
+
+    socket.on("connect", function(){
+        socketReady = true;
+        socketStatus = "Online players: 1";
+        socket.emit("joinGame", getLocalPlayerState());
+    });
+
+    socket.on("connect_error", function(){
+        socketReady = false;
+        socketStatus = "Multiplayer server unavailable";
+    });
+
+    socket.on("disconnect", function(){
+        socketReady = false;
+        remotePlayers = {};
+        socketStatus = "Multiplayer disconnected";
+    });
+
+    socket.on("players", function(players){
+        remotePlayers = {};
+        for(var id in players){
+            if(id != socket.id){
+                remotePlayers[id] = sanitizePlayerState(players[id]);
+            }
+        }
+        socketStatus = "Online players: " + (Object.keys(remotePlayers).length + 1);
+    });
+}
+
+function getLocalPlayerState(){
+    return {
+        name: playerName,
+        x: player.x,
+        y: player.y,
+        width: player.width,
+        height: player.height,
+        color: player.color,
+        levelIndex: levelIndex
+    };
+}
+
+function syncPlayer(){
+    if(!socketReady){
+        return;
+    }
+
+    var now = Date.now();
+    if(now - lastSocketUpdate < 33){
+        return;
+    }
+
+    lastSocketUpdate = now;
+    socket.emit("playerState", getLocalPlayerState());
+}
+
+function changeLevel(nextLevelIndex){
+    levelIndex = nextLevelIndex;
+    if(levelIndex > levels.length - 1){
+        levelIndex = 0;
+    }
+    if(levelIndex < 0){
+        levelIndex = levels.length - 1;
+    }
+
+    setupTileMap(levels[levelIndex]);
+    player.respawn();
+    remotePlayers = {};
+    message("Level " + (levelIndex + 1));
+
+    if(socketReady){
+        socket.emit("changeLevel", getLocalPlayerState());
+    }
+}
+
+function drawRemotePlayers(){
+    var players = getSameLevelRemotePlayers();
+    for(var i = 0; i < players.length; i++){
+        ctx.fillStyle = players[i].color;
+        ctx.fillRect(players[i].x, players[i].y, players[i].width, players[i].height);
+        ctx.font = "14px 'Fira Code', monospace";
+        ctx.fillStyle = "black";
+        ctx.fillText(players[i].name, players[i].x - 4, players[i].y - 8);
+    }
+}
+
+function drawMultiplayerStatus(){
+    ctx.font = "16px 'Fira Code', monospace";
+    ctx.fillStyle = socketReady ? "#00a878" : "#444";
+    ctx.fillText(socketStatus, 16, 26);
+}
+
 var msgBox = "";
 var msgBoxX = 420;
 var msgCount = 0;
@@ -381,41 +549,38 @@ function updateTileMap(){
 }
 function collide(){
     player.colliding = false;
-    for(var i = 0; i < collidables.length; i++){
-        if(Math.abs(player.x - collidables[i].x) < 96 && Math.abs(player.y - collidables[i].y) < 96){
-            if(collides(player, collidables[i])){
-                if(player.getBottom() > collidables[i].y && player.y < collidables[i].y){
+    var solidBodies = collidables.concat(getSameLevelRemotePlayers());
+    for(var i = 0; i < solidBodies.length; i++){
+        if(Math.abs(player.x - solidBodies[i].x) < 96 && Math.abs(player.y - solidBodies[i].y) < 96){
+            if(collides(player, solidBodies[i])){
+                if(player.getBottom() > solidBodies[i].y && player.y < solidBodies[i].y){
                     player.colliding = true;    
                     player.grounded = true; 
                     player.dy = 0;
-                    player.y = collidables[i].y - player.height + 0.1;
-                } else if(player.getTop() < collidables[i].y + collidables[i].height && player.getBottom() > collidables[i].y + collidables[i].height && player.oy >= collidables[i].getBottom()){
+                    player.y = solidBodies[i].y - player.height + 0.1;
+                } else if(player.getTop() < solidBodies[i].y + solidBodies[i].height && player.getBottom() > solidBodies[i].y + solidBodies[i].height && player.oy >= solidBodies[i].getBottom()){
                     player.dy = 0;
-                    player.y = collidables[i].y + collidables[i].height + player.height - 0.1;    
-                } else if(player.ox + player.width >= collidables[i].x && player.dx == 5 && player.getOldCenterX() < collidables[i].getCenterX()){
-                    player.x = collidables[i].x - player.width;
+                    player.y = solidBodies[i].y + solidBodies[i].height + player.height - 0.1;    
+                } else if(player.ox + player.width >= solidBodies[i].x && player.dx == 5 && player.getOldCenterX() < solidBodies[i].getCenterX()){
+                    player.x = solidBodies[i].x - player.width;
                     player.dx = 0;
-                } else if(player.ox <= collidables[i].getRight() && player.dx == -5 && player.getOldCenterX() > collidables[i].getCenterX()){
-                    player.x = collidables[i].x + collidables[i].width;
+                } else if(player.ox <= solidBodies[i].getRight() && player.dx == -5 && player.getOldCenterX() > solidBodies[i].getCenterX()){
+                    player.x = solidBodies[i].x + solidBodies[i].width;
                     player.dx = 0;
                 }
-                if(collidables[i].id == 2){
+                if(solidBodies[i].id == 2){
                     message("Ouch! Don't touch the lava");
                     player.respawn();
                 }
-                if(collidables[i].id == 3){
-                    levelIndex++;
-                    if(levelIndex > levels.length - 1){
-                        levelIndex = 0;    
-                    }
+                if(solidBodies[i].id == 3){
+                    var nextLevelIndex = levelIndex + 1;
                     setTimeout(function(){
-                        setupTileMap(levels[levelIndex]);
-                        message("Level " + (levelIndex + 1));
+                        changeLevel(nextLevelIndex);
                     }, 100)
                     player.respawn();
 
                 }
-                if(collidables[i].id == 4){
+                if(solidBodies[i].id == 4){
                     message("The enemies are dangerous. Don't go near them.");
                     player.respawn();
                 }
@@ -451,8 +616,12 @@ function update(){
     
     updateTileMap();
     
+    drawRemotePlayers();
+
     ctx.fillStyle = player.color;
     ctx.fillRect(player.x, player.y, player.width, player.height);
+    syncPlayer();
+    drawMultiplayerStatus();
     if(msgBox != ""){
         ctx.font = "30px 'Fira Code', monospace";
         ctx.fillStyle = "black";
@@ -489,22 +658,10 @@ function move(key){
             break;
         // Developer Tools:
         case 'l':
-            levelIndex++;
-            if(levelIndex > levels.length - 1){
-                levelIndex = 0;    
-            }
-            setupTileMap(levels[levelIndex]);
-            player.respawn();            
-            message("Level " + (levelIndex + 1));
+            changeLevel(levelIndex + 1);
             break;
         case 'k':
-            levelIndex--;
-            if(levelIndex < 0){
-                levelIndex = levels.length - 1;
-            }
-            setupTileMap(levels[levelIndex]);
-            player.respawn();
-            message("Level " + (levelIndex + 1));
+            changeLevel(levelIndex - 1);
             break;
     }
 } 
@@ -530,6 +687,11 @@ window.addEventListener("keyup", ((evt) => {
 }));
 
 window.onload = function(){
+    var enteredName = prompt("Player name:");
+    if(enteredName){
+        playerName = enteredName.substring(0, 18);
+    }
+
     levels.push(levelOne);
     levels.push(levelTwo);
     levels.push(levelThree);
@@ -540,7 +702,10 @@ window.onload = function(){
     levels.push(levelEight);
     levels.push(levelNine);
     levels.push(levelTen);
+    player.ox = player.x;
+    player.oy = player.y;
     setupTileMap(levels[levelIndex]); 
+    connectMultiplayer();
     update();
     message("Level 1");
 }
