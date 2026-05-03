@@ -151,7 +151,7 @@ function useGrass(){
         grassBought = true;
         usingGrass = true;
         usingDGround = false;
-        grass.innerHTML = "Grass [In Using]";
+        grass.innerHTML = "Grass [In use]";
         grassBtn.style.display = "none";
         dGroundBtn.innerHTML = "Use";
         dGround.innerHTML = "Desert Ground";
