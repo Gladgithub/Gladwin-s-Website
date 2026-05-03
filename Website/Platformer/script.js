@@ -234,12 +234,17 @@ var levelTen = [
 
 //Developer Tools:
 var collidables = [];
+var enemyTiles = [];
+var serverEnemies = [];
 var remotePlayers = {};
 var socket = null;
 var socketReady = false;
 var lastSocketUpdate = 0;
 var socketStatus = "Multiplayer offline";
 var playerName = "Player " + Math.floor(Math.random() * 1000);
+var keys = {};
+var lastFrameTime = 0;
+var localEnemyStartTime = Date.now();
 
 var player = {
     x: 100,
@@ -254,6 +259,8 @@ var player = {
     color: "#52de97",
     speed: 5,
     jumpForce: 15,
+    gravity: 1,
+    maxFallSpeed: 18,
     grounded: false,
     colliding: false,
     
@@ -442,6 +449,12 @@ function connectMultiplayer(){
         }
         socketStatus = "Online players: " + (Object.keys(remotePlayers).length + 1);
     });
+
+    socket.on("enemies", function(payload){
+        if(payload.levelIndex == levelIndex){
+            serverEnemies = payload.enemies || [];
+        }
+    });
 }
 
 function getLocalPlayerState(){
@@ -452,8 +465,23 @@ function getLocalPlayerState(){
         width: player.width,
         height: player.height,
         color: player.color,
-        levelIndex: levelIndex
+        levelIndex: levelIndex,
+        enemies: getEnemyLayout()
     };
+}
+
+function getEnemyLayout(){
+    var enemies = [];
+    for(var i = 0; i < enemyTiles.length; i++){
+        enemies.push({
+            index: i,
+            x: enemyTiles[i].baseX,
+            y: enemyTiles[i].baseY,
+            width: enemyTiles[i].width,
+            height: enemyTiles[i].height
+        });
+    }
+    return enemies;
 }
 
 function syncPlayer(){
@@ -482,6 +510,7 @@ function changeLevel(nextLevelIndex){
     setupTileMap(levels[levelIndex]);
     player.respawn();
     remotePlayers = {};
+    serverEnemies = [];
     message("Level " + (levelIndex + 1));
 
     if(socketReady){
@@ -511,7 +540,9 @@ var msgBoxX = 420;
 var msgCount = 0;
 
 function setupTileMap(tileMap){
-    collidables = [];    
+    collidables = [];
+    enemyTiles = [];
+    localEnemyStartTime = Date.now();
     for(var y = 0; y < mapHeight; y++){
         for(var x = 0; x < mapWidth; x++){
             switch(tileMap[((y*mapWidth)+x)]){
@@ -528,27 +559,45 @@ function setupTileMap(tileMap){
                     new Tile(3, x*tileSize, y*tileSize, "gold");
                     break;
                 case 4:
-                    new Tile(4, x*tileSize, y*tileSize, "#ff5722");
+                    var enemy = new Tile(4, x*tileSize, y*tileSize, "#ff5722");
+                    enemy.enemyIndex = enemyTiles.length;
+                    enemy.baseX = enemy.x;
+                    enemy.baseY = enemy.y;
+                    enemyTiles.push(enemy);
                     break;
             }
         }
-    }    
+    }
 }
+
+function getLocalEnemyX(enemy){
+    var range = 7 * tileSize;
+    var speed = 240;
+    var distance = ((Date.now() - localEnemyStartTime) / 1000 * speed) % (range * 2);
+    if(distance > range){
+        distance = (range * 2) - distance;
+    }
+    return enemy.baseX + distance;
+}
+
+function updateEnemyTilePositions(){
+    for(var i = 0; i < enemyTiles.length; i++){
+        var serverEnemy = serverEnemies[enemyTiles[i].enemyIndex];
+        enemyTiles[i].x = serverEnemy ? serverEnemy.x : getLocalEnemyX(enemyTiles[i]);
+        enemyTiles[i].y = serverEnemy ? serverEnemy.y : enemyTiles[i].baseY;
+    }
+}
+
 function updateTileMap(){
+    updateEnemyTilePositions();
     for(var i = 0; i < collidables.length; i++){
         ctx.fillStyle = collidables[i].color;
         ctx.fillRect(collidables[i].x, collidables[i].y, tileSize, tileSize);
-        if(collidables[i].id == 4 && collidables[i].offsetX < 7 * tileSize){
-            collidables[i].offsetX += collidables[i].tileSpeed;
-            collidables[i].x += collidables[i].tileSpeed * collidables[i].direction;
-        } else {
-            collidables[i].direction *= -1;    
-            collidables[i].offsetX = 0;
-        }
     }    
 }
 function collide(){
     player.colliding = false;
+    player.grounded = false;
     var solidBodies = collidables.concat(getSameLevelRemotePlayers());
     for(var i = 0; i < solidBodies.length; i++){
         if(Math.abs(player.x - solidBodies[i].x) < 96 && Math.abs(player.y - solidBodies[i].y) < 96){
@@ -557,10 +606,10 @@ function collide(){
                     player.colliding = true;    
                     player.grounded = true; 
                     player.dy = 0;
-                    player.y = solidBodies[i].y - player.height + 0.1;
+                    player.y = solidBodies[i].y - player.height;
                 } else if(player.getTop() < solidBodies[i].y + solidBodies[i].height && player.getBottom() > solidBodies[i].y + solidBodies[i].height && player.oy >= solidBodies[i].getBottom()){
                     player.dy = 0;
-                    player.y = solidBodies[i].y + solidBodies[i].height + player.height - 0.1;    
+                    player.y = solidBodies[i].y + solidBodies[i].height;    
                 } else if(player.ox + player.width >= solidBodies[i].x && player.dx == 5 && player.getOldCenterX() < solidBodies[i].getCenterX()){
                     player.x = solidBodies[i].x - player.width;
                     player.dx = 0;
@@ -592,18 +641,32 @@ function collide(){
         }
     }
 }
-function update(){
+function update(timestamp){
+    if(!lastFrameTime){
+        lastFrameTime = timestamp;
+    }
+    var frameScale = Math.min((timestamp - lastFrameTime) / 16.67, 2);
+    lastFrameTime = timestamp;
+
     ctx.clearRect(0, 0, c.width, c.height);
-    
-    gravity();
-    collide();  
-    move();
-    
     
     player.ox = player.x;
     player.oy = player.y;
-    player.x += player.dx;
-    player.y += player.dy;
+
+    applyInput();
+    gravity(frameScale);
+    player.x += player.dx * frameScale;
+    player.y += player.dy * frameScale;
+    updateEnemyTilePositions();
+    collide();
+
+    if(!keys.a && !keys.d){
+        player.dx = 0;
+    }
+
+    if(player.dy > player.maxFallSpeed){
+        player.dy = player.maxFallSpeed;
+    }
     
     if(player.getLeft() < 0){
         player.x = 0;        
@@ -629,12 +692,23 @@ function update(){
     }
     requestAnimationFrame(update);
 }
-function gravity(){
+function gravity(frameScale){
     if(player.grounded == false){
-        player.dy += 1;   
+        player.dy += player.gravity * frameScale;   
     }
 }
-function move(key){
+
+function applyInput(){
+    if(keys.a && !keys.d){
+        player.dx = -player.speed;
+    } else if(keys.d && !keys.a){
+        player.dx = player.speed;
+    } else {
+        player.dx = 0;
+    }
+}
+
+function pressKey(key){
     switch(key){
         case 'w':
             if(player.grounded == true){
@@ -643,13 +717,7 @@ function move(key){
                 player.dy -= player.jumpForce;
             }
             break;
-        case 'a':
-            player.dx = -player.speed;
-            break;
         case 's':
-            break;
-        case 'd':
-            player.dx = player.speed;
             break;
         case ' ':
             break;
@@ -680,10 +748,17 @@ function message(text){
 }
 
 window.addEventListener("keydown", ((evt) => {
-    move(evt.key);
+    var key = evt.key.toLowerCase();
+    if(["w", "a", "s", "d", "r", "l", "k", " "].includes(key)){
+        evt.preventDefault();
+    }
+    if(!keys[key]){
+        pressKey(key);
+    }
+    keys[key] = true;
 }));
 window.addEventListener("keyup", ((evt) => {
-    player.dx = 0;        
+    keys[evt.key.toLowerCase()] = false;
 }));
 
 window.onload = function(){
@@ -706,6 +781,6 @@ window.onload = function(){
     player.oy = player.y;
     setupTileMap(levels[levelIndex]); 
     connectMultiplayer();
-    update();
-    message("Level 1");
+    message("Use WASD to move");
+    requestAnimationFrame(update);
 }
